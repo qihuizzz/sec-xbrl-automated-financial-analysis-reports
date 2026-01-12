@@ -1,7 +1,7 @@
 # Apple Inc. (AAPL) Automated Financial Analysis Report
 
 - CIK: `0000320193`
-- Generated: 2026-01-11 23:29:04
+- Generated: 2026-01-11 23:34:14
 - Coverage: last 5 fiscal years
 
 ## Highlights
@@ -15,17 +15,12 @@
 
 ## Charts
 
-### Revenue
-![Revenue](assets/AAPL/revenue.png)
-
-### Margins
-![Margins](assets/AAPL/margins.png)
-
-### Cash flow
-![Cash flow](assets/AAPL/cash_flow.png)
-
-### Revenue YoY
-![Revenue YoY](assets/AAPL/revenue_yoy.png)
+| | |
+|---|---|
+| <b>Revenue</b><br><img src='assets/AAPL/revenue.png' width='100%'> | <b>Revenue YoY</b><br><img src='assets/AAPL/revenue_yoy.png' width='100%'> |
+| <b>Margins</b><br><img src='assets/AAPL/margins.png' width='100%'> | <b>Cash flow</b><br><img src='assets/AAPL/cash_flow.png' width='100%'> |
+| <b>Income statement levels</b><br><img src='assets/AAPL/income_statement.png' width='100%'> | <b>Balance sheet snapshot</b><br><img src='assets/AAPL/balance_sheet.png' width='100%'> |
+| <b>Cash flow quality</b><br><img src='assets/AAPL/cash_quality.png' width='100%'> |  |
 
 ## Annual Financials Table (USD in billions)
 |   fy | fiscal_year_end   |   revenue |   gross_profit |   operating_income |   net_income |   cfo |   capex |   fcf | revenue_yoy   | gross_margin   | operating_margin   | net_margin   | fcf_margin   |   cash |   equity |
