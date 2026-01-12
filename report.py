@@ -4,7 +4,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 from pathlib import Path
-from typing import Dict, Optional, Tuple, List
+from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 
@@ -73,12 +73,12 @@ def _make_insights(display_df: pd.DataFrame) -> str:
     fcf = _safe_float(latest.get("fcf"))
     fcfm = _safe_float(latest.get("fcf_margin"))
 
-    lines = []
+    lines: List[str] = []
     if fy is not None:
-        lines.append(f"- Latest fiscal year: **FY{int(fy)}** (ended {end}).")
+        lines.append(f"- Latest fiscal year: **FY{int(fy)}** ended {end}.")
     if rev is not None:
         if rev_yoy is not None:
-            lines.append(f"- Revenue: **{_num(rev)}B** ({_pct(rev_yoy)} YoY).")
+            lines.append(f"- Revenue: **{_num(rev)}B** and {_pct(rev_yoy)} YoY.")
         else:
             lines.append(f"- Revenue: **{_num(rev)}B**.")
     if gm is not None:
@@ -89,7 +89,7 @@ def _make_insights(display_df: pd.DataFrame) -> str:
         lines.append(f"- Net margin: **{_pct(nm)}**.")
     if fcf is not None:
         if fcfm is not None:
-            lines.append(f"- Free cash flow: **{_num(fcf)}B** ({_pct(fcfm)} of revenue).")
+            lines.append(f"- Free cash flow: **{_num(fcf)}B** and {_pct(fcfm)} of revenue.")
         else:
             lines.append(f"- Free cash flow: **{_num(fcf)}B**.")
 
@@ -108,23 +108,25 @@ def _make_insights(display_df: pd.DataFrame) -> str:
     return "\n".join(lines)
 
 
-def _render_two_col_image_grid(pairs: List[Tuple[str, str, str]]) -> str:
-    """
-    pairs: list of left_title left_path right_title right_path
-    Use html img for stable sizing on GitHub markdown
-    """
+def _render_two_col_images(items: List[Tuple[str, str]]) -> str:
     lines: List[str] = []
     lines.append("| | |")
     lines.append("|---|---|")
-    for left_title, left_path, right in pairs:
-        if right:
-            right_title, right_path = right.split("||", 1)
-            left_cell = f"<b>{left_title}</b><br><img src='{left_path}' width='100%'>"
+
+    i = 0
+    while i < len(items):
+        left_title, left_path = items[i]
+        left_cell = f"<b>{left_title}</b><br><img src='{left_path}' width='100%'>"
+
+        if i + 1 < len(items):
+            right_title, right_path = items[i + 1]
             right_cell = f"<b>{right_title}</b><br><img src='{right_path}' width='100%'>"
-            lines.append(f"| {left_cell} | {right_cell} |")
         else:
-            left_cell = f"<b>{left_title}</b><br><img src='{left_path}' width='100%'>"
-            lines.append(f"| {left_cell} |  |")
+            right_cell = ""
+
+        lines.append(f"| {left_cell} | {right_cell} |")
+        i += 2
+
     return "\n".join(lines)
 
 
@@ -150,15 +152,17 @@ def build_report_markdown(
 
     cfg = FinancialsConfig(last_n_years=years)
     raw_table = build_annual_financials_table(df, cfg=cfg)
-    display_table = format_financials_for_display(raw_table)
+    display_table_for_math = format_financials_for_display(raw_table)
 
     charts: Dict[str, str] = {}
-    if generate_charts and not display_table.empty:
+    if generate_charts and not display_table_for_math.empty:
         asset_dir = out_root / "assets" / ticker
-        charts = save_financial_charts(display_table, str(asset_dir))
+        charts = save_financial_charts(display_table_for_math, str(asset_dir))
 
     def _rel_path(p: str) -> str:
         return str(Path(p).relative_to(out_root)).replace("\\", "/")
+
+    display_table = display_table_for_math.copy()
 
     preferred_cols = [
         "fy",
@@ -182,6 +186,9 @@ def build_report_markdown(
         col for col in display_table.columns if col not in preferred_cols
     ]
     display_table = display_table[cols].copy()
+
+    if "fy" in display_table.columns:
+        display_table = display_table.sort_values("fy", ascending=False).reset_index(drop=True)
 
     if "fy" in display_table.columns:
         display_table["fy"] = display_table["fy"].apply(
@@ -211,7 +218,7 @@ def build_report_markdown(
             display_table[col] = display_table[col].apply(lambda x: _pct(_safe_float(x), digits=1))
 
     md_lines: List[str] = []
-    md_lines.append(f"# {company_name} ({ticker}) Automated Financial Analysis Report")
+    md_lines.append(f"# {company_name} - {ticker} Automated Financial Analysis Report")
     md_lines.append("")
     md_lines.append(f"- CIK: `{cik}`")
     md_lines.append(f"- Generated: {dt.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -219,11 +226,12 @@ def build_report_markdown(
     md_lines.append("")
 
     md_lines.append("## Highlights")
-    md_lines.append(_make_insights(format_financials_for_display(raw_table)))
+    md_lines.append(_make_insights(display_table_for_math))
     md_lines.append("")
 
     md_lines.append("## Charts")
     md_lines.append("")
+
     if not charts:
         md_lines.append("_No charts generated._")
         md_lines.append("")
@@ -236,24 +244,15 @@ def build_report_markdown(
             ("Income statement levels", "income_statement"),
             ("Balance sheet snapshot", "balance_sheet"),
             ("Cash flow quality", "cash_quality"),
+            ("Return on equity", "roe"),
         ]
         items = [(title, _rel_path(charts[key])) for title, key in order if key in charts]
 
-        pairs: List[Tuple[str, str, str]] = []
-        i = 0
-        while i < len(items):
-            left_title, left_path = items[i]
-            if i + 1 < len(items):
-                right_title, right_path = items[i + 1]
-                pairs.append((left_title, left_path, f"{right_title}||{right_path}"))
-            else:
-                pairs.append((left_title, left_path, ""))
-            i += 2
-
-        md_lines.append(_render_two_col_image_grid(pairs))
+        md_lines.append(_render_two_col_images(items))
         md_lines.append("")
 
-    md_lines.append("## Annual Financials Table (USD in billions)")
+    md_lines.append("## Annual Financials Table")
+    md_lines.append("USD in billions for level metrics")
     md_lines.append(_as_markdown_table(display_table))
     md_lines.append("")
 
@@ -274,10 +273,8 @@ def build_report_markdown(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Generate automated financial analysis report from SEC XBRL company facts."
-    )
-    parser.add_argument("--ticker", required=True, help="Ticker symbol, e.g. AAPL")
+    parser = argparse.ArgumentParser(description="Generate automated financial analysis report from SEC XBRL facts")
+    parser.add_argument("--ticker", required=True, help="Ticker symbol, for example AAPL")
     parser.add_argument("--years", type=int, default=5, help="Number of fiscal years to include")
     parser.add_argument("--out", default="reports", help="Output directory")
     parser.add_argument("--no-concept-map", action="store_true", help="Do not include concept map section")

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Tuple
 
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mtick
@@ -13,194 +13,246 @@ def _ensure_dir(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
 
 
-def _clean_xy(df: pd.DataFrame) -> Tuple[list[int], pd.DataFrame]:
-    d = df.copy()
-    d = d.sort_values("fy", ascending=True)
+def _prep_df(display_df: pd.DataFrame) -> Tuple[List[int], pd.DataFrame]:
+    d = display_df.copy()
+    d = d.sort_values("fy", ascending=True).reset_index(drop=True)
     x = d["fy"].astype(int).tolist()
     return x, d
 
 
+def _apply_style() -> None:
+    try:
+        plt.style.use("seaborn-v0_8-whitegrid")
+    except Exception:
+        pass
+
+    plt.rcParams.update(
+        {
+            "figure.dpi": 170,
+            "savefig.dpi": 170,
+            "font.size": 11,
+            "axes.titlesize": 14,
+            "axes.labelsize": 11,
+            "legend.fontsize": 10,
+            "axes.titlepad": 10,
+        }
+    )
+
+
 def _beautify_axis(ax) -> None:
     ax.grid(True, axis="y", alpha=0.25)
+    ax.grid(False, axis="x")
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
 
 
-def _annotate_last(ax, x: list[int], y: pd.Series, suffix: str = "") -> None:
+def _series_has_data(s: pd.Series) -> bool:
+    return pd.to_numeric(s, errors="coerce").notna().any()
+
+
+def _annotate_last(ax, x: List[int], y: pd.Series, fmt: str) -> None:
     s = pd.to_numeric(y, errors="coerce")
     if s.notna().sum() == 0:
         return
-    idx = s.last_valid_index()
-    if idx is None:
-        return
-    last_x = x[list(s.index).index(idx)] if idx in s.index else x[-1]
-    last_y = float(s.loc[idx])
+
+    last_i = int(s.last_valid_index())
+    last_x = x[last_i]
+    last_y = float(s.iloc[last_i])
+
+    ax.scatter([last_x], [last_y], zorder=5)
     ax.annotate(
-        f"{last_y:.1f}{suffix}",
+        fmt.format(last_y),
         xy=(last_x, last_y),
-        xytext=(6, 0),
+        xytext=(8, 0),
         textcoords="offset points",
         va="center",
-        fontsize=9,
+        fontsize=10,
+        bbox={"boxstyle": "round,pad=0.25", "fc": "white", "ec": "none", "alpha": 0.8},
     )
 
 
+def _save(fig, out_path: Path, filename: str) -> str:
+    fp = out_path / filename
+    fig.savefig(fp, bbox_inches="tight")
+    plt.close(fig)
+    return str(fp).replace("\\", "/")
+
+
 def save_financial_charts(display_df: pd.DataFrame, out_dir: str) -> Dict[str, str]:
-    """
-    display_df is output of format_financials_for_display
-    USD lines are scaled to billions
-    margin columns are decimals
-    """
     out_path = Path(out_dir)
     _ensure_dir(out_path)
 
     if display_df is None or display_df.empty:
         return {}
 
-    x, df = _clean_xy(display_df)
+    _apply_style()
+    x, df = _prep_df(display_df)
 
     saved: Dict[str, str] = {}
 
-    plt.rcParams.update(
-        {
-            "figure.dpi": 160,
-            "savefig.dpi": 160,
-            "font.size": 11,
-            "axes.titlesize": 13,
-            "axes.labelsize": 11,
-            "legend.fontsize": 10,
-        }
+    billions_fmt = mtick.FormatStrFormatter("%.1f")
+    pct_fmt_0 = mtick.PercentFormatter(xmax=1.0, decimals=0)
+
+    def line_chart(
+        key: str,
+        title: str,
+        series_list: List[Tuple[str, str]],
+        y_label: str,
+        y_formatter=None,
+        annotate_suffix: str = "",
+        fill_first: bool = False,
+        filename: str = "",
+    ) -> None:
+        have_any = any(col in df.columns and _series_has_data(df[col]) for col, _ in series_list)
+        if not have_any:
+            return
+
+        fig, ax = plt.subplots(figsize=(7.6, 4.6))
+        for idx, (col, label) in enumerate(series_list):
+            if col not in df.columns or not _series_has_data(df[col]):
+                continue
+            ax.plot(x, df[col], marker="o", linewidth=2.2, label=label)
+            if fill_first and idx == 0:
+                ax.fill_between(x, pd.to_numeric(df[col], errors="coerce"), alpha=0.10)
+
+        ax.set_title(title)
+        ax.set_xlabel("Fiscal year")
+        ax.set_ylabel(y_label)
+        if y_formatter is not None:
+            ax.yaxis.set_major_formatter(y_formatter)
+
+        if len(series_list) > 1:
+            ax.legend(loc="best")
+
+        _beautify_axis(ax)
+
+        first_col = series_list[0][0]
+        if first_col in df.columns and _series_has_data(df[first_col]):
+            if annotate_suffix:
+                _annotate_last(ax, x, df[first_col], "{:.1f}" + annotate_suffix)
+            else:
+                _annotate_last(ax, x, df[first_col], "{:.1f}")
+
+        saved[key] = _save(fig, out_path, filename or f"{key}.png")
+
+    def bar_chart(
+        key: str,
+        title: str,
+        col: str,
+        y_label: str,
+        y_formatter=None,
+        filename: str = "",
+        zero_line: bool = False,
+    ) -> None:
+        if col not in df.columns or not _series_has_data(df[col]):
+            return
+
+        fig, ax = plt.subplots(figsize=(7.6, 4.6))
+        ax.bar(x, df[col])
+        if zero_line:
+            ax.axhline(0, linewidth=1)
+
+        ax.set_title(title)
+        ax.set_xlabel("Fiscal year")
+        ax.set_ylabel(y_label)
+        if y_formatter is not None:
+            ax.yaxis.set_major_formatter(y_formatter)
+
+        _beautify_axis(ax)
+        saved[key] = _save(fig, out_path, filename or f"{key}.png")
+
+    line_chart(
+        key="revenue",
+        title="Revenue",
+        series_list=[("revenue", "Revenue")],
+        y_label="USD billions",
+        y_formatter=billions_fmt,
+        annotate_suffix="B",
+        fill_first=True,
+        filename="revenue.png",
     )
 
-    billions_fmt = mtick.FormatStrFormatter("%.1f")
-    pct_fmt = mtick.PercentFormatter(xmax=1.0, decimals=0)
+    line_chart(
+        key="margins",
+        title="Margins",
+        series_list=[
+            ("gross_margin", "Gross margin"),
+            ("operating_margin", "Operating margin"),
+            ("net_margin", "Net margin"),
+            ("fcf_margin", "FCF margin"),
+        ],
+        y_label="Percent",
+        y_formatter=pct_fmt_0,
+        filename="margins.png",
+    )
 
-    def _save(fig, filename: str) -> str:
-        fp = out_path / filename
-        fig.savefig(fp, bbox_inches="tight")
-        plt.close(fig)
-        return str(fp).replace("\\", "/")
+    line_chart(
+        key="cash_flow",
+        title="Cash flow",
+        series_list=[("cfo", "CFO"), ("capex", "Capex"), ("fcf", "FCF")],
+        y_label="USD billions",
+        y_formatter=billions_fmt,
+        filename="cash_flow.png",
+    )
 
-    # Chart 1 Revenue
-    if "revenue" in df.columns and pd.to_numeric(df["revenue"], errors="coerce").notna().any():
-        fig, ax = plt.subplots(figsize=(7.2, 4.2))
-        ax.plot(x, df["revenue"], marker="o", linewidth=2)
-        ax.set_title("Revenue")
-        ax.set_xlabel("Fiscal year")
-        ax.set_ylabel("USD billions")
-        ax.yaxis.set_major_formatter(billions_fmt)
-        _beautify_axis(ax)
-        _annotate_last(ax, x, df["revenue"], "B")
-        saved["revenue"] = _save(fig, "revenue.png")
+    bar_chart(
+        key="revenue_yoy",
+        title="Revenue YoY",
+        col="revenue_yoy",
+        y_label="Percent",
+        y_formatter=pct_fmt_0,
+        filename="revenue_yoy.png",
+        zero_line=True,
+    )
 
-    # Chart 2 Margins
-    margin_cols = [
-        ("gross_margin", "Gross margin"),
-        ("operating_margin", "Operating margin"),
-        ("net_margin", "Net margin"),
-        ("fcf_margin", "FCF margin"),
-    ]
-    have_any = any(c in df.columns and pd.to_numeric(df[c], errors="coerce").notna().any() for c, _ in margin_cols)
-    if have_any:
-        fig, ax = plt.subplots(figsize=(7.2, 4.2))
-        for c, label in margin_cols:
-            if c in df.columns and pd.to_numeric(df[c], errors="coerce").notna().any():
-                ax.plot(x, df[c], marker="o", linewidth=2, label=label)
-        ax.set_title("Margins")
-        ax.set_xlabel("Fiscal year")
-        ax.set_ylabel("Percent")
-        ax.yaxis.set_major_formatter(pct_fmt)
-        ax.legend(loc="best")
-        _beautify_axis(ax)
-        saved["margins"] = _save(fig, "margins.png")
+    line_chart(
+        key="income_statement",
+        title="Income statement levels",
+        series_list=[
+            ("revenue", "Revenue"),
+            ("gross_profit", "Gross profit"),
+            ("operating_income", "Operating income"),
+            ("net_income", "Net income"),
+        ],
+        y_label="USD billions",
+        y_formatter=billions_fmt,
+        filename="income_statement.png",
+    )
 
-    # Chart 3 Cash flow
-    cf_cols = [
-        ("cfo", "CFO"),
-        ("capex", "Capex"),
-        ("fcf", "FCF"),
-    ]
-    have_any = any(c in df.columns and pd.to_numeric(df[c], errors="coerce").notna().any() for c, _ in cf_cols)
-    if have_any:
-        fig, ax = plt.subplots(figsize=(7.2, 4.2))
-        for c, label in cf_cols:
-            if c in df.columns and pd.to_numeric(df[c], errors="coerce").notna().any():
-                ax.plot(x, df[c], marker="o", linewidth=2, label=label)
-        ax.set_title("Cash flow")
-        ax.set_xlabel("Fiscal year")
-        ax.set_ylabel("USD billions")
-        ax.yaxis.set_major_formatter(billions_fmt)
-        ax.legend(loc="best")
-        _beautify_axis(ax)
-        saved["cash_flow"] = _save(fig, "cash_flow.png")
+    line_chart(
+        key="balance_sheet",
+        title="Balance sheet snapshot",
+        series_list=[("cash", "Cash"), ("equity", "Equity")],
+        y_label="USD billions",
+        y_formatter=billions_fmt,
+        filename="balance_sheet.png",
+    )
 
-    # Chart 4 Revenue YoY
-    if "revenue_yoy" in df.columns and pd.to_numeric(df["revenue_yoy"], errors="coerce").notna().any():
-        fig, ax = plt.subplots(figsize=(7.2, 4.2))
-        ax.bar(x, df["revenue_yoy"])
-        ax.set_title("Revenue YoY")
-        ax.set_xlabel("Fiscal year")
-        ax.set_ylabel("Percent")
-        ax.yaxis.set_major_formatter(pct_fmt)
-        _beautify_axis(ax)
-        saved["revenue_yoy"] = _save(fig, "revenue_yoy.png")
-
-    # New chart 5 Income statement levels
-    level_cols = [
-        ("revenue", "Revenue"),
-        ("gross_profit", "Gross profit"),
-        ("operating_income", "Operating income"),
-        ("net_income", "Net income"),
-    ]
-    have_any = any(c in df.columns and pd.to_numeric(df[c], errors="coerce").notna().any() for c, _ in level_cols)
-    if have_any:
-        fig, ax = plt.subplots(figsize=(7.2, 4.2))
-        for c, label in level_cols:
-            if c in df.columns and pd.to_numeric(df[c], errors="coerce").notna().any():
-                ax.plot(x, df[c], marker="o", linewidth=2, label=label)
-        ax.set_title("Income statement levels")
-        ax.set_xlabel("Fiscal year")
-        ax.set_ylabel("USD billions")
-        ax.yaxis.set_major_formatter(billions_fmt)
-        ax.legend(loc="best")
-        _beautify_axis(ax)
-        saved["income_statement"] = _save(fig, "income_statement.png")
-
-    # New chart 6 Balance sheet snapshot
-    bs_cols = [
-        ("cash", "Cash"),
-        ("equity", "Equity"),
-    ]
-    have_any = any(c in df.columns and pd.to_numeric(df[c], errors="coerce").notna().any() for c, _ in bs_cols)
-    if have_any:
-        fig, ax = plt.subplots(figsize=(7.2, 4.2))
-        for c, label in bs_cols:
-            if c in df.columns and pd.to_numeric(df[c], errors="coerce").notna().any():
-                ax.plot(x, df[c], marker="o", linewidth=2, label=label)
-        ax.set_title("Balance sheet snapshot")
-        ax.set_xlabel("Fiscal year")
-        ax.set_ylabel("USD billions")
-        ax.yaxis.set_major_formatter(billions_fmt)
-        ax.legend(loc="best")
-        _beautify_axis(ax)
-        saved["balance_sheet"] = _save(fig, "balance_sheet.png")
-
-    # New chart 7 Cash flow quality
-    if (
-        "cfo" in df.columns
-        and "net_income" in df.columns
-        and pd.to_numeric(df["cfo"], errors="coerce").notna().any()
-        and pd.to_numeric(df["net_income"], errors="coerce").notna().any()
-    ):
-        fig, ax = plt.subplots(figsize=(7.2, 4.2))
+    if "cfo" in df.columns and "net_income" in df.columns and _series_has_data(df["cfo"]) and _series_has_data(df["net_income"]):
         diff = pd.to_numeric(df["cfo"], errors="coerce") - pd.to_numeric(df["net_income"], errors="coerce")
-        ax.bar(x, diff)
-        ax.axhline(0, linewidth=1)
-        ax.set_title("Cash flow quality")
-        ax.set_xlabel("Fiscal year")
-        ax.set_ylabel("CFO minus net income, USD billions")
-        ax.yaxis.set_major_formatter(billions_fmt)
-        _beautify_axis(ax)
-        saved["cash_quality"] = _save(fig, "cash_quality.png")
+        df["cfo_minus_net_income"] = diff
+
+        bar_chart(
+            key="cash_quality",
+            title="Cash flow quality",
+            col="cfo_minus_net_income",
+            y_label="CFO minus net income, USD billions",
+            y_formatter=billions_fmt,
+            filename="cash_quality.png",
+            zero_line=True,
+        )
+
+    if "net_income" in df.columns and "equity" in df.columns and _series_has_data(df["net_income"]) and _series_has_data(df["equity"]):
+        roe = pd.to_numeric(df["net_income"], errors="coerce") / pd.to_numeric(df["equity"], errors="coerce")
+        df["roe"] = roe
+
+        line_chart(
+            key="roe",
+            title="Return on equity",
+            series_list=[("roe", "ROE")],
+            y_label="Percent",
+            y_formatter=pct_fmt_0,
+            filename="roe.png",
+        )
 
     return saved
