@@ -272,24 +272,74 @@ def build_report_markdown(
     return md_text, str(out_path)
 
 
+def _parse_tickers(args) -> List[str]:
+    if getattr(args, "tickers", None):
+        raw: List[str] = []
+        for item in args.tickers:
+            raw.extend([x.strip() for x in item.split(",") if x.strip()])
+        return [t.upper() for t in raw if t]
+    if getattr(args, "ticker", None):
+        return [args.ticker.strip().upper()]
+    return []
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate automated financial analysis report from SEC XBRL facts")
-    parser.add_argument("--ticker", required=True, help="Ticker symbol, for example AAPL")
+
+    # keep single-ticker mode
+    parser.add_argument("--ticker", help="Single ticker symbol, for example AAPL")
+
+    # new multi-ticker mode
+    parser.add_argument(
+        "--tickers",
+        nargs="*",
+        help="Multiple tickers: --tickers AAPL,MSFT,NVDA  OR  --tickers AAPL MSFT NVDA",
+    )
+
     parser.add_argument("--years", type=int, default=5, help="Number of fiscal years to include")
     parser.add_argument("--out", default="reports", help="Output directory")
     parser.add_argument("--no-concept-map", action="store_true", help="Do not include concept map section")
     parser.add_argument("--no-charts", action="store_true", help="Do not generate charts")
 
     args = parser.parse_args()
+    tickers = _parse_tickers(args)
+    if not tickers:
+        raise SystemExit("Please provide --ticker or --tickers.")
 
-    _, path = build_report_markdown(
-        ticker=args.ticker,
-        years=args.years,
-        out_dir=args.out,
-        include_concept_map=not args.no_concept_map,
-        generate_charts=not args.no_charts,
-    )
-    print(path)
+    out_root = Path(args.out)
+    out_root.mkdir(parents=True, exist_ok=True)
+
+    results: List[Tuple[str, str]] = []
+    for t in tickers:
+        try:
+            _, path = build_report_markdown(
+                ticker=t,
+                years=args.years,
+                out_dir=args.out,
+                include_concept_map=not args.no_concept_map,
+                generate_charts=not args.no_charts,
+            )
+            print(f"OK: {t} -> {path}")
+            results.append((t, path))
+        except Exception as e:
+            print(f"ERROR: {t} -> {e}")
+
+    # Write an index.md for convenience
+    index_path = out_root / "index.md"
+    lines: List[str] = []
+    lines.append("# Automated Financial Analysis Reports")
+    lines.append("")
+    lines.append(f"- Generated: {dt.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    lines.append(f"- Coverage: last {args.years} fiscal years")
+    lines.append("")
+    lines.append("## Reports")
+    lines.append("")
+    for t, p in results:
+        rel = str(Path(p).relative_to(out_root)).replace("\\", "/")
+        lines.append(f"- [{t}]({rel})")
+    lines.append("")
+    index_path.write_text("\n".join(lines), encoding="utf-8")
+    print(f"Index written: {index_path}")
 
 
 if __name__ == "__main__":

@@ -13,7 +13,7 @@ from xbrl_normalize import normalize_pipeline
 from financials import build_annual_financials_table, format_financials_for_display
 
 
-DB_DEFAULT = os.path.join("outputs", "sec_fin.db")
+DB_DEFAULT = os.path.join("output_database", "sec_fin.db")
 
 
 def _ensure_parent(path: str) -> None:
